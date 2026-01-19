@@ -62,17 +62,17 @@ Required data will be extracted from the json on the server.
     - NOTE: additional: if open-meteo api is not available, I may search for the closest city and provide it's forecast for the current time.
   - GET city:
     - Returns cities list (name and coordinates).
-  - POST city(name, lat, long):
-    - Inserts city into the database
-    - Sends update request to open-meteo and updates forecast for the city.
+  - POST city(name, lat, long, user_id):
+    - Check if city exists. If not:
+      - Inserts city into the database
+      - Sends update request to open-meteo and updates forecast for the city.
+    - Assign city to user if user_id is provided
   - GET weather/city/{name} (time, include\[temp, hum, wind, rain\])
     - Fetch forecast json
     - Get forecast of the hour closest to the required time.
     - Send fields specified in include.
   - POST user(username)
     - Saves user to db
-  - POST user/city/{city_name}:
-    - Assigns city to user.
 
 Honestly, storing forecasts for the same cities separately for each user is BS because we have one point of truth (open-meteo). And 2-4 methods don't need user's id: data does not depend on user in any way.
 This is an issue of weak requirements and I will not do that. Instead I'll add endpoint that retrieves forecast data for all the user's cities to make use of the user entity:
