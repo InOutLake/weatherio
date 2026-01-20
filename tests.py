@@ -6,7 +6,7 @@ import pytest_asyncio
 from aiosqlite import connect
 from httpx import ASGITransport, AsyncClient
 
-from main import (
+from script import (
     CityCreate,
     CityRepo,
     UserRepo,
