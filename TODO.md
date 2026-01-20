@@ -13,20 +13,20 @@ TODO:
   - [x] The stack;
 
 Implementation:
-- [ ] Setup database.
-- [ ] City repository (create, update, get)
-- [ ] User repository (create, save_city, get_cities)
-- [ ] Fetch function for coordinates.
-- [ ] Fetch function for cities in the database.
-- [ ] Background task with database automatic update.
-- [ ] Web interface
+- [x] Setup database.
+- [x] City repository (create, update, get)
+- [x] User repository (create, save_city, get_cities)
+- [x] Fetch function for coordinates.
+- [x] Fetch function for cities in the database.
+- [x] Background task with database automatic update.
+- [x] Web interface
 
 Estimated time: ~8h
-It could be way less but I would like to go with TDD, which may consume a bit extra time.
+It could be less but I would like to go with TDD, which may consume a bit extra time on such a simple project.
 
 Additional:
-- [ ] Users system
-- [ ] Unit tests
+- [x] Users system
+- [x] Unit tests
 
 Analysis:
 1. One of the concerns is the `current_day` term. The best solution would be the requester's (user's) current day. Since many users can request one city, to satisfy this requirement I'll save two day forecast for each city, from UTC-12 to UTC+36. This ensures that service could provide `current_day` weather forecast for any timezone. This can be achieved with `start_hour` and `end_hour` request variables on open-meteo.
@@ -89,3 +89,4 @@ Structure draft: ~1h
 Refine draft: ~1h
 
 Tests implementation: ~1.5h
+Main implementation: ~5h

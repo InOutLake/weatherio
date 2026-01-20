@@ -1,11 +1,21 @@
+from datetime import datetime, time, timedelta
+import json
 from uuid import UUID
 
 import pytest
 import pytest_asyncio
 from aiosqlite import connect
 from httpx import ASGITransport, AsyncClient
+import logging
 
-from main import CityCreate, CityRepo, UserRepo, app, get_db_connection, init_db
+from main import (
+    CityCreate,
+    CityRepo,
+    UserRepo,
+    app,
+    get_db_connection,
+    init_db,
+)
 
 
 # -- setup --
@@ -43,11 +53,14 @@ async def test_add_city_and_retrieve(db_connection):
     city_in = CityCreate(name="London", lat=51.5074, lon=-0.1278)
 
     created_city = await repo.add_city(city_in)
-    assert created_city.name == "London"
+    assert created_city.name == city_in.name.lower()
 
     cities = await repo.get_cities()
     assert len(cities) == 1
-    assert cities[0].name == "London"
+    assert cities[0].name == city_in.name.lower()
+
+    # test forecast is there
+    assert await repo.get_forecast_json(created_city.name) is not None
 
 
 @pytest.mark.asyncio
@@ -65,11 +78,7 @@ async def test_link_user_to_city(db_connection):
 
     user_cities = await city_repo.get_cities(user_id=user_id)
     assert len(user_cities) == 1
-    assert user_cities[0].name == "Paris"
-
-
-@pytest.mark.asyncio
-async def test_refresh_forecasts(db_connection): ...
+    assert user_cities[0].name == city_data.name
 
 
 # -- API tests --
@@ -89,7 +98,7 @@ async def test_add_and_list_cities_endpoint(client):
     get_res = await client.get("/cities")
     assert get_res.status_code == 200
     assert len(get_res.json()) == 1
-    assert get_res.json()[0]["name"] == "Berlin"
+    assert get_res.json()[0]["name"] == city_data["name"].lower()
 
 
 @pytest.mark.asyncio
@@ -98,13 +107,40 @@ async def test_get_city_weather_schema(client):
 
     await client.post("/cities", json=city_data)
 
+    request_forecast_time = (datetime.now() + timedelta(hours=5)).time()
+    request_forecast_time = request_forecast_time.isoformat()
     params = {
-        "time": "2024-01-01T12:00:00",
+        "time": request_forecast_time,
         "include": ["temperature_2m", "wind_speed_10m"],
     }
     response = await client.get("/weather/city/Tokyo", params=params)
-
     assert response.status_code == 200
     data = response.json()
     assert "city_name" in data
-    assert "data" in data[0].name == "Paris"
+
+
+@pytest.mark.asyncio
+async def test_weather_index_alignment(client, db_connection):
+    city_name = "berlin"
+    await client.post("/cities", json={"name": city_name, "lat": 52.52, "lon": 13.41})
+
+    # the point of truth
+    repo = CityRepo(db_connection)
+    raw_forecast = await repo.get_forecast_json(city_name)
+    assert raw_forecast
+
+    hourly_data = raw_forecast["hourly"]
+
+    for h in range(24):
+        test_time = time(hour=h, minute=0)
+        params = {"time": test_time.isoformat(), "include": ["temperature_2m"]}
+
+        response = await client.get(f"/weather/city/{city_name}", params=params)
+        assert response.status_code == 200
+
+        res_data = response.json()
+
+        for i, t in enumerate(hourly_data["time"]):
+            if datetime.fromisoformat(t).hour == h:
+                expected_temp = hourly_data["temperature_2m"][i]
+                assert res_data["data"]["temperature_2m"] == expected_temp
