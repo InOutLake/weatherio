@@ -84,3 +84,8 @@ This is an issue of weak requirements and I will not do that. Instead I'll add e
 # Time track
 First glance analysis and formalization: ~1h
 Second glance analysis: ~30m
+
+Structure draft: ~1h
+Refine draft: ~1h
+
+Tests implementation: ~1.5h
