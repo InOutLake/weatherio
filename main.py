@@ -1,20 +1,19 @@
-import pytest
-import uvicorn
 import asyncio
 import json
+import logging
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, time, timedelta
 from enum import Enum
 from pathlib import Path
-import sys
 from typing import Annotated, Any, List
 from uuid import UUID, uuid4
 
 import httpx
+import uvicorn
 from aiosqlite import Connection, connect
-from fastapi import Depends, FastAPI, Query, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator, Field, field_validator
-import logging
 
 # --- Prerequisites ---
 DATABASE_URL = "weatherio.db"
@@ -241,11 +240,14 @@ class CityRepo:
             )
 
         new_id = str(uuid4())
+
+        initial_forecast = None
         try:
             initial_forecast = await OpenMeteoRepo.fetch_forecasts(
                 [(city.lat, city.lon)]
             )
-        except OpenMeteoUnnacessableError as e:
+            initial_forecast = json.dumps(initial_forecast[0])
+        except OpenMeteoUnnacessableError:
             ...
 
         await cursor.execute(
@@ -255,7 +257,7 @@ class CityRepo:
                 city.name,
                 city.lat,
                 city.lon,
-                json.dumps(initial_forecast[0]),
+                initial_forecast,
             ),
         )
         await self.db.commit()
@@ -339,7 +341,9 @@ async def city_weather(
     repo = CityRepo(db)
     forecast = await repo.get_forecast_json(name)
     if not forecast:
-        raise HTTPException(status_code=404, detail="City not found")
+        raise HTTPException(
+            status_code=404, detail="City not found or forecast is not available"
+        )
 
     hourly = forecast["hourly"]
     update_hour = datetime.fromisoformat(hourly["time"][0]).hour

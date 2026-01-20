@@ -85,8 +85,10 @@ This is an issue of weak requirements and I will not do that. Instead I'll add e
 First glance analysis and formalization: ~1h
 Second glance analysis: ~30m
 
-Structure draft: ~1h
-Refine draft: ~1h
+Structure draft: \~1h
+Refine draft: \~1h
+Tests implementation: \~1.5h
+Main implementation: \~5h
+Small Fixes: \~3h
 
-Tests implementation: ~1.5h
-Main implementation: ~5h
+Took a bit more then needed but that's mainly due to my own stubbornness and perfectionism

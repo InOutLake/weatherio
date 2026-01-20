@@ -1,12 +1,10 @@
 from datetime import datetime, time, timedelta
-import json
 from uuid import UUID
 
 import pytest
 import pytest_asyncio
 from aiosqlite import connect
 from httpx import ASGITransport, AsyncClient
-import logging
 
 from main import (
     CityCreate,
