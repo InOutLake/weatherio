@@ -48,10 +48,14 @@ LowerCaseStr = Annotated[
 ]
 
 
+Latitude = Annotated[float, Field(ge=-90, le=90)]
+Longitude = Annotated[float, Field(ge=-180, le=180)]
+
+
 class CityCreate(BaseModel):
     name: Annotated[LowerCaseStr, Field(max_length=64)]
-    lat: Annotated[float, Field(ge=-90, le=90)]
-    lon: Annotated[float, Field(ge=-180, le=180)]
+    lat: Latitude
+    lon: Longitude
 
     @field_validator("lat", "lon", mode="before")
     @classmethod
@@ -312,7 +316,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/weather/current")
-async def get_current_weather(lat: float, lon: float):
+async def get_current_weather(lat: Latitude, lon: Longitude):
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -381,6 +385,7 @@ async def add_city(
     repo = CityRepo(db)
     city = await repo.add_city(city_in)
     if user_id:
+        # TODO: make a check if user exists
         await repo.link_user_city(user_id, city.id)
     return city
 
