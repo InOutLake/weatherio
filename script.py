@@ -111,7 +111,7 @@ async def init_db(db: Connection):
         await cursor.executescript("""
             CREATE TABLE users (
                 id TEXT PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL
+                username TEXT NOT NULL
             );
 
             CREATE TABLE cities (
@@ -206,8 +206,11 @@ class OpenMeteoRepo:
 # --- update forecasts task ---
 async def refresh_forecasts(db: Connection) -> None:
     """Updates forecasts in batches"""
-    cursor = await db.cursor()
-    await cursor.execute("SELECT id, latitude, longitude FROM cities")
+    async with db.execute("SELECT id, latitude, longitude FROM cities") as cursor:
+        all_cities = await cursor.fetchall()
+
+    if not all_cities:
+        return
 
     while True:
         rows = await cursor.fetchmany(100)
@@ -361,7 +364,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/weather/current")
 async def get_current_weather(lat: Latitude, lon: Longitude):
-    data = await OpenMeteoRepo.fetch_current(lat, lon)
+    return await OpenMeteoRepo.fetch_current(lat, lon)
 
 
 @app.get("/weather/city/{name}", response_model=WeatherResponse)
