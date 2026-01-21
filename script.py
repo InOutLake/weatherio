@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 import httpx
 import uvicorn
 from aiosqlite import Connection, connect
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, BeforeValidator, Field, field_validator
 
 # --- Prerequisites ---
@@ -32,8 +32,20 @@ file_handler.setFormatter(formatter)
 
 
 # --- Models and Dtos ---
+# Types
+LowerCaseStr = Annotated[
+    str, BeforeValidator(lambda v: v.lower() if isinstance(v, str) else v)
+]
+
+ID = UUID
+Latitude = Annotated[float, Field(ge=-90, le=90)]
+Longitude = Annotated[float, Field(ge=-180, le=180)]
+NewId = Annotated[ID, Field(default_factory=uuid4)]
+
+
+# Models
 class CitySummary(BaseModel):
-    id: UUID
+    id: ID
     name: str
     lat: float
     lon: float
@@ -43,17 +55,9 @@ class CityDB(CitySummary):
     forecast: dict | None = None
 
 
-LowerCaseStr = Annotated[
-    str, BeforeValidator(lambda v: v.lower() if isinstance(v, str) else v)
-]
-
-
-Latitude = Annotated[float, Field(ge=-90, le=90)]
-Longitude = Annotated[float, Field(ge=-180, le=180)]
-
-
 class CityCreate(BaseModel):
-    name: Annotated[LowerCaseStr, Field(max_length=64)]
+    id: NewId
+    name: Annotated[LowerCaseStr, Field(min_length=1, max_length=64)]
     lat: Latitude
     lon: Longitude
 
@@ -67,6 +71,11 @@ class CityCreate(BaseModel):
     @classmethod
     def name_to_lowercase(cls, v: str) -> str:
         return v.lower()
+
+
+class UserCreate(BaseModel):
+    id: NewId
+    name: Annotated[str, Field(max_length=64)]
 
 
 class WeatherResponse(BaseModel):
@@ -125,12 +134,19 @@ async def init_db(db: Connection):
         await db.commit()
 
 
-class OpenMeteoUnnacessableError(Exception): ...
+class OpenMeteoUnnacessableError(HTTPException):
+    def __init__(self):
+        super().__init__(
+            status_code=500, detail={"message": "Open meteo is unnaccessable"}
+        )
 
 
 class OpenMeteoRepo:
-    @staticmethod
+    url = "https://api.open-meteo.com/v1/forecast"
+
+    @classmethod
     async def fetch_forecasts(
+        cls,
         coordinates: List[tuple[float, float]],
     ) -> list[dict[str, Any]]:  # type: ignore
         if not coordinates:
@@ -141,30 +157,50 @@ class OpenMeteoRepo:
 
         start_datetime = datetime.now().replace(minute=0, second=0, microsecond=0)
 
-        url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": lats,
             "longitude": lons,
             "hourly": "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,surface_pressure",
             "timezone": "auto",
             "start_hour": start_datetime.isoformat(),
-            "end_hour": (start_datetime + timedelta(hours=24)).isoformat(),
+            "end_hour": (start_datetime + timedelta(hours=23)).isoformat(),
         }
 
         async with httpx.AsyncClient() as client:
             retries, wait_for = 3, 10
             for attempt in range(retries):
                 try:
-                    resp = await client.get(url, params=params, timeout=20)
+                    resp = await client.get(cls.url, params=params, timeout=20)
                     resp.raise_for_status()
                     data = resp.json()
                     return data if isinstance(data, list) else [data]
                 except httpx.HTTPStatusError as e:
                     logging.warning(f"Couldn't fetch data from open-meteo: {e}")
                     if attempt == retries - 1:
-                        logging.error("Open-meteo is unnaccessable. Aborting fetch")
+                        logging.error("Open-meteo is unnaccessable. Aborting fetch.")
                         raise OpenMeteoUnnacessableError
                     await asyncio.sleep(wait_for)
+
+    @classmethod
+    async def fetch_current(cls, lat: float, lon: float):
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "current": "temperature_2m,wind_speed_10m,surface_pressure",
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.get(cls.url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                curr = data["current"]
+                return {
+                    "temperature": curr["temperature_2m"],
+                    "wind_speed": curr["wind_speed_10m"],
+                    "pressure": curr["surface_pressure"],
+                }
+            except httpx.HTTPStatusError:
+                raise OpenMeteoUnnacessableError
 
 
 # --- update forecasts task ---
@@ -225,6 +261,27 @@ async def lifespan(app: FastAPI):
         pass
 
 
+class UserRepo:
+    def __init__(self, db: Connection):
+        self.db = db
+
+    async def create_user(self, user: UserCreate) -> ID:
+        cursor = await self.db.cursor()
+        await cursor.execute(
+            "INSERT INTO users (id, username) VALUES (?, ?)", (str(user.id), user.name)
+        )
+        await self.db.commit()
+        return user.id
+
+    async def check_exists(self, user_id: ID) -> bool:
+        cursor = await self.db.cursor()
+        await cursor.execute("SELECT id FROM users WHERE id = ?", (str(user_id),))
+        user = await cursor.fetchone()
+        if user is not None:
+            return True
+        return False
+
+
 class CityRepo:
     def __init__(self, db: Connection):
         self.db = db
@@ -240,10 +297,8 @@ class CityRepo:
 
         if existing:
             return CitySummary(
-                id=UUID(existing[0]), name=existing[1], lat=existing[2], lon=existing[3]
+                id=ID(existing[0]), name=existing[1], lat=existing[2], lon=existing[3]
             )
-
-        new_id = str(uuid4())
 
         initial_forecast = None
         try:
@@ -257,7 +312,7 @@ class CityRepo:
         await cursor.execute(
             "INSERT INTO cities (id, name, latitude, longitude, forecast_json) VALUES (?, ?, ?, ?, ?)",
             (
-                new_id,
+                str(city.id),
                 city.name,
                 city.lat,
                 city.lon,
@@ -265,9 +320,9 @@ class CityRepo:
             ),
         )
         await self.db.commit()
-        return CitySummary(id=UUID(new_id), name=city.name, lat=city.lat, lon=city.lon)
+        return CitySummary(id=city.id, name=city.name, lat=city.lat, lon=city.lon)
 
-    async def get_cities(self, user_id: UUID | None = None) -> List[CitySummary]:
+    async def get_cities(self, user_id: ID | None = None) -> List[CitySummary]:
         cursor = await self.db.cursor()
         if user_id:
             await cursor.execute(
@@ -279,7 +334,7 @@ class CityRepo:
 
         rows = await cursor.fetchall()
         return [
-            CitySummary(id=UUID(row[0]), name=row[1], lat=row[2], lon=row[3])
+            CitySummary(id=ID(row[0]), name=row[1], lat=row[2], lon=row[3])
             for row in rows
         ]
 
@@ -289,7 +344,10 @@ class CityRepo:
         row = await cursor.fetchone()
         return json.loads(row[0]) if row else None
 
-    async def link_user_city(self, user_id: UUID, city_id: UUID):
+    async def link_user_city(self, user_id: ID, city_id: ID):
+        user_repo = UserRepo(self.db)
+        if not await user_repo.check_exists(user_id):
+            raise ValueError("User does not exists")
         cursor = await self.db.cursor()
         await cursor.execute(
             "INSERT OR IGNORE INTO user_cities (user_id, city_id) VALUES (?, ?)",
@@ -298,41 +356,12 @@ class CityRepo:
         await self.db.commit()
 
 
-class UserRepo:
-    def __init__(self, db: Connection):
-        self.db = db
-
-    async def create_user(self, name: str) -> UUID:
-        new_id = str(uuid4())
-        cursor = await self.db.cursor()
-        await cursor.execute(
-            "INSERT INTO users (id, username) VALUES (?, ?)", (new_id, name)
-        )
-        await self.db.commit()
-        return UUID(new_id)
-
-
 app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/weather/current")
 async def get_current_weather(lat: Latitude, lon: Longitude):
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "current": "temperature_2m,wind_speed_10m,surface_pressure",
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        curr = data["current"]
-        return {
-            "temperature": curr["temperature_2m"],
-            "wind_speed": curr["wind_speed_10m"],
-            "pressure": curr["surface_pressure"],
-        }
+    data = await OpenMeteoRepo.fetch_current(lat, lon)
 
 
 @app.get("/weather/city/{name}", response_model=WeatherResponse)
@@ -358,8 +387,6 @@ async def city_weather(
         requested_hour = time.hour
 
     index = requested_hour - update_hour
-    if index < 0:
-        index -= 1
 
     extracted_data = {p.value: hourly[p.value][index] for p in include}
 
@@ -385,15 +412,17 @@ async def add_city(
     repo = CityRepo(db)
     city = await repo.add_city(city_in)
     if user_id:
-        # TODO: make a check if user exists
-        await repo.link_user_city(user_id, city.id)
+        try:
+            await repo.link_user_city(user_id, city.id)
+        except ValueError:
+            ...
     return city
 
 
-@app.post("/users", response_model=UUID)
-async def register_user(name: str, db: Connection = Depends(get_db_connection)):
+@app.post("/users", response_model=ID)
+async def register_user(user: UserCreate, db: Connection = Depends(get_db_connection)):
     repo = UserRepo(db)
-    return await repo.create_user(name)
+    return await repo.create_user(user)
 
 
 if __name__ == "__main__":
