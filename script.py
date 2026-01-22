@@ -435,4 +435,4 @@ async def register_user(user: UserCreate, db: Connection = Depends(get_db_connec
 
 
 if __name__ == "__main__":
-    uvicorn.run("script:app", workers=1)
+    uvicorn.run("script:app", workers=4)
