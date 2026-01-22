@@ -1,14 +1,13 @@
 import asyncio
+from asgi_lifespan import LifespanManager
 from datetime import datetime, time, timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
-import httpx
 import pytest
 import pytest_asyncio
 from aiosqlite import connect
-from fastapi import status
-from httpx import ASGITransport, AsyncClient, Request, Response
+from httpx import ASGITransport, AsyncClient
 
 from script import (
     CityCreate,
@@ -284,33 +283,35 @@ async def test_add_city_with_invalid_user_id(client):
 # OpenMeteo API failure
 @pytest.mark.asyncio
 async def test_openuv_api_failure_during_city_creation():
-    with patch.object(
-        OpenMeteoRepo, "fetch_forecasts", new_callable=AsyncMock
-    ) as mock_fetch:
-        mock_fetch.side_effect = OpenMeteoUnnacessableError()
+    async with LifespanManager(app) as manager:
+        with patch.object(
+            OpenMeteoRepo, "fetch_forecasts", new_callable=AsyncMock
+        ) as mock_fetch:
+            mock_fetch.side_effect = OpenMeteoUnnacessableError()
 
-        city_data = {"name": "TestCity7", "lat": 40.7128, "lon": -74.0060}
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
-            response = await ac.post("/cities", json=city_data)
-            assert response.status_code == 200
+            city_data = {"name": "TestCity7", "lat": 40.7128, "lon": -74.0060}
+            async with AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://test"
+            ) as ac:
+                response = await ac.post("/cities", json=city_data)
+                assert response.status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_openuv_api_http_error():
-    with patch.object(
-        OpenMeteoRepo, "fetch_current", new_callable=AsyncMock
-    ) as mock_fetch:
-        mock_fetch.side_effect = OpenMeteoUnnacessableError()
+    async with LifespanManager(app) as manager:
+        with patch.object(
+            OpenMeteoRepo, "fetch_current", new_callable=AsyncMock
+        ) as mock_fetch:
+            mock_fetch.side_effect = OpenMeteoUnnacessableError()
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
-            response = await ac.get(
-                "/weather/current", params={"lat": 40.7128, "lon": -74.0060}
-            )
-            assert response.status_code in [500, 422]
+            async with AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://test"
+            ) as ac:
+                response = await ac.get(
+                    "/weather/current", params={"lat": 40.7128, "lon": -74.0060}
+                )
+                assert response.status_code in [500, 422]
 
 
 @pytest.mark.asyncio

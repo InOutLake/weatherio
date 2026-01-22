@@ -93,10 +93,14 @@ class WeatherParameter(str, Enum):
 
 
 # --- Logic ---
+# Using one global connection since SQLite is a file db and many connections leads to I/O heavy operations
+db_instance: Connection | None = None
+
+
 async def get_db_connection():
-    async with connect(DATABASE_URL) as db:
-        db.row_factory = None
-        yield db
+    if db_instance is None:
+        raise RuntimeError("Database is not initialized")
+    yield db_instance
 
 
 async def init_db(db: Connection):
@@ -206,11 +210,8 @@ class OpenMeteoRepo:
 # --- update forecasts task ---
 async def refresh_forecasts(db: Connection) -> None:
     """Updates forecasts in batches"""
-    async with db.execute("SELECT id, latitude, longitude FROM cities") as cursor:
-        all_cities = await cursor.fetchall()
-
-    if not all_cities:
-        return
+    cursor = await db.cursor()
+    await cursor.execute("SELECT id, latitude, longitude FROM cities")
 
     while True:
         rows = await cursor.fetchmany(100)
@@ -233,14 +234,13 @@ async def refresh_forecasts(db: Connection) -> None:
             continue
 
 
-async def refresh_task():
+async def refresh_task(db: Connection):
     while True:
         start_time = datetime.now()
-        async with connect(DATABASE_URL) as db:
-            try:
-                await refresh_forecasts(db)
-            except Exception as e:
-                logging.error(f"Refresh failed: {e}")
+        try:
+            await refresh_forecasts(db)
+        except Exception as e:
+            logging.error(f"Refresh failed: {e}")
         end_time = datetime.now()
         sleep_time = max(
             0, (timedelta(minutes=15) - (end_time - start_time)).total_seconds()
@@ -249,19 +249,23 @@ async def refresh_task():
 
 
 # ---
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with connect(DATABASE_URL) as db:
-        await init_db(db)
-    bg_task = asyncio.create_task(refresh_task())
+    global db_instance
+    db_instance = await connect(DATABASE_URL, timeout=60.0)
+
+    # Most operations are reading so WAL might help a little and freshness of the data is not THAT important
+    await db_instance.execute("PRAGMA journal_mode=WAL;")
+    await db_instance.execute("PRAGMA synchronous=NORMAL;")
+
+    await init_db(db_instance)
+
+    bg_task = asyncio.create_task(refresh_task(db_instance))
+
     yield
+
     bg_task.cancel()
-    try:
-        await bg_task
-    except asyncio.CancelledError:
-        pass
+    await db_instance.close()
 
 
 class UserRepo:
@@ -345,7 +349,9 @@ class CityRepo:
         cursor = await self.db.cursor()
         await cursor.execute("SELECT forecast_json FROM cities WHERE name = ?", (name,))
         row = await cursor.fetchone()
-        return json.loads(row[0]) if row else None
+        if row and row[0] is not None:
+            return json.loads(row[0])
+        return None
 
     async def link_user_city(self, user_id: ID, city_id: ID):
         user_repo = UserRepo(self.db)
@@ -429,4 +435,4 @@ async def register_user(user: UserCreate, db: Connection = Depends(get_db_connec
 
 
 if __name__ == "__main__":
-    uvicorn.run(app)
+    uvicorn.run("script:app", workers=1)
