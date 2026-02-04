@@ -98,6 +98,7 @@ db_instance: Connection | None = None
 
 
 async def get_db_connection():
+    global db_instance
     if db_instance is None:
         raise RuntimeError("Database is not initialized")
     yield db_instance
